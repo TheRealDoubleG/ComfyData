@@ -1,0 +1,13 @@
+## Interface: 16001
+## Title: ComfyData
+## Notes: Persistent account-wide data service for the Comfy Suite on WoW Forever.
+## Notes-deDE: Persistenter accountweiter Datendienst für die Comfy Suite in WoW Forever.
+## Author: TheRealDoubleG
+## Version: 0.2
+## SavedVariables: ComfyDataDB
+## OptionalDeps: ComfyDataVault
+## X-ComfySuite: true
+## X-ComfyDataService: true
+## IconTexture: Interface\\Icons\\INV_Misc_Book_11
+
+Core.lua
