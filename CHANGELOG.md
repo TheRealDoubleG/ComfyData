@@ -1,5 +1,10 @@
 # ComfyData Changelog
 
+## 0.3 Beta – 28.09.2026
+- Deduplicated gathering-node visits per gather action.
+- Added stored zone names for gathering statistics/tooltips.
+
+
 ## 0.2 Beta – 28.09.2026
 - Promoted ComfyData from the temporary bundled build version into its own repository.
 - Added schema-versioned database structure and migration history.
