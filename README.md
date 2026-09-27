@@ -1,11 +1,11 @@
 # ComfyData
 
-**Version 0.4 – Beta**  
+**Version 0.5 – Beta**  
 **Target: World of Warcraft: Forever 1.60.1 / Interface 16001**
 
 ComfyData is the persistent background database/API for the Comfy Suite.
 
-It intentionally has almost no UI. Other Comfy addons read and write through the ComfyData API.
+It intentionally has almost no UI. Other Comfy addons read and write through the ComfyData API. A small status page is registered in Blizzard's AddOns settings list.
 
 ## 0.4 Beta
 
