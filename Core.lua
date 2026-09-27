@@ -525,10 +525,14 @@ function D:RecordGather(data)
         store.nodes[nodeKey] = node
     end
     node.lastSeen = now
-    node.visits = (tonumber(node.visits) or 0) + 1
+    if data.visitID == nil or node.lastVisitID ~= data.visitID then
+        node.visits = (tonumber(node.visits) or 0) + 1
+        node.lastVisitID = data.visitID
+    end
     node.items[itemKey] = (tonumber(node.items[itemKey]) or 0) + quantity
 
     local zone = EnsureTable(store.zones, tostring(mapID))
+    zone.name = data.zoneName or zone.name
     zone.items = type(zone.items) == "table" and zone.items or {}
     zone.total = (tonumber(zone.total) or 0) + quantity
     zone.items[itemKey] = (tonumber(zone.items[itemKey]) or 0) + quantity
