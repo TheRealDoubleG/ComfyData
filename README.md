@@ -1,11 +1,15 @@
 # ComfyData
 
-**Version 0.3 – Beta**  
+**Version 0.4 – Beta**  
 **Target: World of Warcraft: Forever 1.60.1 / Interface 16001**
 
 ComfyData is the persistent background database/API for the Comfy Suite.
 
 It intentionally has almost no UI. Other Comfy addons read and write through the ComfyData API.
+
+## 0.4 Beta
+
+- Documentation/version alignment after the repository promotion and gathering-database hardening.
 
 ## 0.3 Beta
 
@@ -28,7 +32,7 @@ It intentionally has almost no UI. Other Comfy addons read and write through the
 
 ## Database safety
 
-ComfyData 0.2 uses schema migrations and preserves unknown fields. Before a schema migration it asks **ComfyDataVault** for a full snapshot.
+ComfyData 0.4 uses schema migrations and preserves unknown fields. Before a schema migration it asks **ComfyDataVault** for a full snapshot.
 
 The live database is `ComfyDataDB.lua`; Vault backups are separately stored in `ComfyDataVaultDB.lua`. Both live in WoW's account `WTF/SavedVariables` area, not in `Interface/AddOns`.
 
