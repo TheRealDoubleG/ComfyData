@@ -1,11 +1,16 @@
 # ComfyData
 
-**Version 0.2 – Beta**  
+**Version 0.3 – Beta**  
 **Target: World of Warcraft: Forever 1.60.1 / Interface 16001**
 
 ComfyData is the persistent background database/API for the Comfy Suite.
 
 It intentionally has almost no UI. Other Comfy addons read and write through the ComfyData API.
+
+## 0.3 Beta
+
+- Deduplicates a gathering node visit when one gathering action yields multiple item stacks.
+- Stores zone names alongside map IDs for cleaner Gatherer tooltips and statistics.
 
 ## Stored data
 
