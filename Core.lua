@@ -4,7 +4,7 @@ ComfyData = ComfyData or {}
 local D = ComfyData
 
 D.name = ADDON_NAME or "ComfyData"
-D.version = "0.4"
+D.version = "0.5"
 D.schemaVersion = 2
 
 local function Epoch()
@@ -629,8 +629,46 @@ function D:GetStatus()
     }
 end
 
+function D:RegisterBlizzardSettingsCategory()
+    if self.settingsCategory then return end
+    if not (Settings and Settings.RegisterCanvasLayoutCategory and Settings.RegisterAddOnCategory) then return end
+
+    local canvas = CreateFrame("Frame")
+    local isDE = type(GetLocale) == "function" and GetLocale() == "deDE"
+
+    local title = canvas:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
+    title:SetPoint("TOPLEFT", 16, -16)
+    title:SetText("ComfyData")
+
+    local desc = canvas:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+    desc:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -12)
+    desc:SetWidth(560)
+    desc:SetJustifyH("LEFT")
+    desc:SetText(isDE
+        and "Persistenter Hintergrund-Datendienst der Comfy Suite. Die Daten liegen in den WoW-SavedVariables und bleiben bei Addon-Updates erhalten."
+        or "Persistent background data service for the Comfy Suite. Data is stored in WoW SavedVariables and survives addon-folder updates.")
+
+    local status = canvas:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    status:SetPoint("TOPLEFT", desc, "BOTTOMLEFT", 0, -18)
+    status:SetWidth(560)
+    status:SetJustifyH("LEFT")
+    local info = self:GetStatus()
+    status:SetText(string.format("v%s  ·  schema %s  ·  %d chars  ·  %d mobs  ·  %d nodes",
+        tostring(info.version), tostring(info.schemaVersion), tonumber(info.characters) or 0,
+        tonumber(info.killMobs) or 0, tonumber(info.gatherNodes) or 0))
+
+    local commands = canvas:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    commands:SetPoint("TOPLEFT", status, "BOTTOMLEFT", 0, -18)
+    commands:SetText("/cdata  ·  /cdata snapshot  ·  /cdata restore")
+
+    local category = Settings.RegisterCanvasLayoutCategory(canvas, "ComfyData")
+    Settings.RegisterAddOnCategory(category)
+    self.settingsCategory = category
+end
+
 function D:Initialize()
     self:EnsureDB()
+    self:RegisterBlizzardSettingsCategory()
 
     self.sessionStartedAt = Epoch()
     self.sessionID = tostring(self.sessionStartedAt) .. ":" .. self:GetCurrentKey()
