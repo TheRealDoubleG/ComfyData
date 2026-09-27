@@ -1,5 +1,11 @@
 # ComfyData Changelog
 
+## 0.5 Beta – 28.09.2026
+- Registered ComfyData in Blizzard's AddOns settings list.
+- Added a lightweight status page with schema, character, kill and gathering counts.
+- Kept ComfyData as a background service with no heavy configuration UI.
+
+
 ## 0.4 Beta – 28.09.2026
 - Aligned public documentation/version references after the 0.3 gathering-data changes.
 
