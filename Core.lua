@@ -4,7 +4,7 @@ ComfyData = ComfyData or {}
 local D = ComfyData
 
 D.name = ADDON_NAME or "ComfyData"
-D.version = "0.3"
+D.version = "0.4"
 D.schemaVersion = 2
 
 local function Epoch()
