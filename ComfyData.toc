@@ -3,7 +3,7 @@
 ## Notes: Persistent account-wide data service for the Comfy Suite on WoW Forever.
 ## Notes-deDE: Persistenter accountweiter Datendienst für die Comfy Suite in WoW Forever.
 ## Author: TheRealDoubleG
-## Version: 0.3
+## Version: 0.4
 ## SavedVariables: ComfyDataDB
 ## OptionalDeps: ComfyDataVault
 ## X-ComfySuite: true
