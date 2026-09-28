@@ -11,3 +11,4 @@
 ## IconTexture: Interface\\Icons\\INV_Misc_Book_11
 
 Core.lua
+BlizzardSettings.lua
