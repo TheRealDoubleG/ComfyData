@@ -1,5 +1,11 @@
 # ComfyData Changelog
 
+## 0.7 (development)
+- Quest, player death and self-loot tracking, schema v3.
+- Block unsafe auto-reset and migration without Vault backup.
+- Use explicit checksum-verified restore path.
+- Expanded Lua tests.
+
 ## 0.5 Beta – 28.09.2026
 - Registered ComfyData in Blizzard's AddOns settings list.
 - Added a lightweight status page with schema, character, kill and gathering counts.
