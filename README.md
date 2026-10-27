@@ -1,47 +1,33 @@
-# ComfyData
+# ComfyData 0.7 (development)
 
-**Version 0.5 – Beta**  
-**Target: World of Warcraft: Forever 1.60.1 / Interface 16001**
+WoW Forever 1.60.1 / Interface 16001. Shared data collector/API for Comfy
+Suite addons. Tracks character identity, gold, XP, time, PvP, bags,
+reputation, combat metrics, mob kills and gathering.
 
-ComfyData is the persistent background database/API for the Comfy Suite.
+New:
+- Quest turn-ins (quest ID, time, character, optional XP/money reward).
+- Three-second duplicate quest-event suppression.
+- Player death events, via existing RecordDeath API.
+- RecordLoot API for other addons, plus CHAT_MSG_LOOT collection that
+  filters through Blizzard's localized SELF-loot templates.
+- Schema v3 adds quests/loot tables; preserves unknown existing fields.
 
-It intentionally has almost no UI. Other Comfy addons read and write through the ComfyData API. A small status page is registered in Blizzard's AddOns settings list.
+Database safety:
+Existing populated DBs are not migrated unless ComfyDataVault confirms a
+pre-migration checksum-verified snapshot. On corruption, recover from a
+verified Vault snapshot or quarantine the original. If both fail, block
+initialization instead of destroying the data.
 
-## 0.4 Beta
+Commands:
+- /cdata : status
+- /cdata snapshot : manual Vault snapshot
+- /cdvault restore confirm : manual verified restore followed by /reload
 
-- Documentation/version alignment after the repository promotion and gathering-database hardening.
+The client only persists SavedVariables on logout/reload, not per event.
+Use the external WTF backup script in the ComfyDataVault repository.
 
-## 0.3 Beta
+Offline tests:
+lua5.1 tests/test_data.lua . ../ComfyDataVault
+lua5.4 tests/test_data.lua . ../ComfyDataVault
 
-- Deduplicates a gathering node visit when one gathering action yields multiple item stacks.
-- Stores zone names alongside map IDs for cleaner Gatherer tooltips and statistics.
-
-## Stored data
-
-- character identity, realm, class, faction and level
-- current money, session delta and tracked positive gains
-- free / maximum normal bag slots
-- XP, max XP, rested XP and tracked XP gains
-- total played time
-- PvP session and lifetime honorable kills
-- equipped-item durability
-- reputation snapshots
-- session/last-fight/tracked combat damage and DPS
-- mob-kill database for ComfyKills
-- gathering nodes/items/zones/sessions for ComfyGatherer
-
-## Database safety
-
-ComfyData 0.4 uses schema migrations and preserves unknown fields. Before a schema migration it asks **ComfyDataVault** for a full snapshot.
-
-The live database is `ComfyDataDB.lua`; Vault backups are separately stored in `ComfyDataVaultDB.lua`. Both live in WoW's account `WTF/SavedVariables` area, not in `Interface/AddOns`.
-
-Replacing/updating the addon folder does not overwrite the data.
-
-## Commands
-
-- `/cdata` – database status
-- `/cdata snapshot` – create a Vault snapshot
-- `/cdata restore` – restore the newest valid Vault snapshot; then `/reload`
-
-External backups of the WoW `WTF` folder are still recommended against disk loss or an accidental WTF reset.
+Forever release-client validation is still needed.
