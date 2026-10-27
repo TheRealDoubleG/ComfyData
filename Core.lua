@@ -4,8 +4,8 @@ ComfyData = ComfyData or {}
 local D = ComfyData
 
 D.name = ADDON_NAME or "ComfyData"
-D.version = "0.6"
-D.schemaVersion = 2
+D.version = "0.7"
+D.schemaVersion = 3
 
 local function Epoch()
     return type(time) == "function" and time() or 0
@@ -152,6 +152,8 @@ function D:NewDatabase()
         characters = {},
         kills = {account = {}, characters = {}, sessions = {}, deaths = {}},
         gathering = {nodes = {}, items = {}, zones = {}, characters = {}, sessions = {}},
+        quests = {completed = {}, characters = {}},
+        loot = {items = {}, characters = {}, sessions = {}},
         sessions = {},
         accountTotals = {},
     }
@@ -159,7 +161,7 @@ end
 
 function D:ValidateDB(db)
     if type(db) ~= "table" then return false, "database is not a table" end
-    local required = {"characters", "kills", "gathering", "sessions", "accountTotals"}
+    local required = {"characters", "kills", "gathering", "quests", "loot", "sessions", "accountTotals"}
     for _, key in ipairs(required) do
         if db[key] ~= nil and type(db[key]) ~= "table" then return false, key .. " is invalid" end
     end
@@ -183,6 +185,13 @@ function D:EnsureStructure(db)
     EnsureTable(gathering, "zones")
     EnsureTable(gathering, "characters")
     EnsureTable(gathering, "sessions")
+    local quests = EnsureTable(db, "quests")
+    EnsureTable(quests, "completed")
+    EnsureTable(quests, "characters")
+    local loot = EnsureTable(db, "loot")
+    EnsureTable(loot, "items")
+    EnsureTable(loot, "characters")
+    EnsureTable(loot, "sessions")
     EnsureTable(db, "sessions")
     EnsureTable(db, "accountTotals")
     return db
@@ -197,25 +206,36 @@ function D:CreateVaultSnapshot(reason)
 end
 
 function D:MigrateDB(db)
+    local meta = type(db.meta) == "table" and db.meta or {}
+    local oldSchema = tonumber(meta.schemaVersion) or tonumber(db.schema) or 1
+    if oldSchema < self.schemaVersion then
+        -- Never migrate a populated DB without first preserving its original state.
+        -- A failed Vault write must not silently erase the only recoverable copy.
+        local ok, why = self:CreateVaultSnapshot(
+            "pre-migration-" .. tostring(oldSchema) .. "-to-" .. tostring(self.schemaVersion))
+        local hasCharacters = type(db.characters) == "table" and next(db.characters) ~= nil
+        if not ok and hasCharacters then
+            return nil, "pre-migration backup failed: " .. tostring(why)
+        end
+    end
+
     self:EnsureStructure(db)
-    local oldSchema = tonumber(db.meta.schemaVersion) or tonumber(db.schema) or 1
     if oldSchema >= self.schemaVersion then
-        db.meta.schemaVersion = self.schemaVersion
+        db.meta.schemaVersion = oldSchema -- Never downgrade newer schema data.
         db.schema = nil
         return db
     end
 
-    self:CreateVaultSnapshot("pre-migration-" .. tostring(oldSchema) .. "-to-" .. tostring(self.schemaVersion))
-
     if oldSchema < 2 then
         db.meta.migrationHistory[#db.meta.migrationHistory + 1] = {
-            from = oldSchema,
-            to = 2,
-            at = Epoch(),
-            version = self.version,
+            from = oldSchema, to = 2, at = Epoch(), version = self.version,
         }
     end
-
+    if oldSchema < 3 then
+        db.meta.migrationHistory[#db.meta.migrationHistory + 1] = {
+            from = math.max(2, oldSchema), to = 3, at = Epoch(), version = self.version,
+        }
+    end
     db.meta.schemaVersion = self.schemaVersion
     db.schema = nil
     self:EnsureStructure(db)
@@ -223,9 +243,10 @@ function D:MigrateDB(db)
 end
 
 function D:EnsureDB()
+    if self.blockedReason then return nil, self.blockedReason end
     if type(ComfyDataDB) ~= "table" then ComfyDataDB = self:NewDatabase() end
 
-    local valid = self:ValidateDB(ComfyDataDB)
+    local valid, why = self:ValidateDB(ComfyDataDB)
     if not valid then
         local recovered
         if type(ComfyDataVault) == "table" and type(ComfyDataVault.GetLatestSnapshotData) == "function" then
@@ -237,15 +258,30 @@ function D:EnsureDB()
         end
         if not recovered then
             local broken = ComfyDataDB
+            local quarantined = false
+            if type(ComfyDataVault) == "table" and type(ComfyDataVault.QuarantineData) == "function" then
+                quarantined = ComfyDataVault:QuarantineData(broken, why)
+            end
+            if not quarantined then
+                self.blockedReason = "invalid DB and no safe quarantine: " .. tostring(why)
+                self:Print(self.blockedReason .. " - no automatic reset; restore with /cdvault.")
+                return nil, self.blockedReason
+            end
             ComfyDataDB = self:NewDatabase()
             ComfyDataDB.meta.recoveredBrokenDB = {
-                at = Epoch(),
-                oldType = type(broken),
+                at = Epoch(), oldType = type(broken), reason = why,
             }
+            self:Print("Corrupt DB preserved in the Vault quarantine before reset.")
         end
     end
 
-    ComfyDataDB = self:MigrateDB(ComfyDataDB)
+    local migrated, err = self:MigrateDB(ComfyDataDB)
+    if not migrated then
+        self.blockedReason = err
+        self:Print("Database startup stopped: " .. tostring(err))
+        return nil, err
+    end
+    ComfyDataDB = migrated
     self.db = ComfyDataDB
     return self.db
 end
@@ -481,6 +517,97 @@ function D:RecordDeath(data)
     return deaths
 end
 
+function D:RecordQuestCompletion(questID, xpReward, moneyReward)
+    questID = tonumber(questID)
+    if not questID or questID <= 0 then return false, "invalid quest ID" end
+    local charKey = self:GetCurrentKey()
+    local key = tostring(math.floor(questID))
+    local now = Epoch()
+    self.recentQuestEvents = self.recentQuestEvents or {}
+    local recentKey = charKey .. ":" .. key
+    if self.recentQuestEvents[recentKey] and now - self.recentQuestEvents[recentKey] < 3 then
+        return false, "duplicate event"
+    end
+    self.recentQuestEvents[recentKey] = now
+    local quests = EnsureTable(self:GetDB(), "quests")
+    local completed = EnsureTable(quests, "completed")
+    local record = completed[key] or {questID = questID, firstAt = now, total = 0, characters = {}}
+    completed[key] = record
+    record.total = (record.total or 0) + 1
+    record.lastAt = now
+    record.characters[charKey] = (record.characters[charKey] or 0) + 1
+    local ok, rewardXP = pcall(tonumber, xpReward)
+    if ok and rewardXP then record.lastXPReward = rewardXP end
+    ok, rewardXP = pcall(tonumber, moneyReward)
+    if ok and rewardXP then record.lastMoneyReward = rewardXP end
+    if C_QuestLog and type(C_QuestLog.GetTitleForQuestID) == "function" then
+        local valid, title = pcall(C_QuestLog.GetTitleForQuestID, questID)
+        if valid and type(title) == "string" then record.title = title end
+    end
+    local byCharacter = EnsureTable(EnsureTable(quests, "characters"), charKey)
+    local entry = byCharacter[key] or {count = 0}
+    entry.count = entry.count + 1
+    entry.lastAt = now
+    byCharacter[key] = entry
+    self.db.meta.lastSavedAt = now
+    return true
+end
+
+function D:RecordLoot(data)
+    if type(data) ~= "table" then return false, "invalid loot" end
+    local itemID = tonumber(data.itemID)
+    if not itemID or itemID <= 0 then return false, "missing itemID" end
+    local quantity = tonumber(data.quantity) or 1
+    if quantity < 1 or quantity > 100000 then quantity = 1 end
+    quantity = math.floor(quantity)
+    local now = tonumber(data.time) or Epoch()
+    local charKey = data.characterKey or self:GetCurrentKey()
+    local loot = EnsureTable(self:GetDB(), "loot")
+    local items = EnsureTable(loot, "items")
+    local key = tostring(math.floor(itemID))
+    local record = items[key] or {itemID = itemID, firstAt = now, total = 0, events = 0}
+    items[key] = record
+    record.total = record.total + quantity
+    record.events = record.events + 1
+    record.lastAt = now
+    if type(data.name) == "string" then record.name = data.name end
+    local byCharacter = EnsureTable(EnsureTable(loot, "characters"), charKey)
+    byCharacter[key] = (byCharacter[key] or 0) + quantity
+    local bySession = EnsureTable(EnsureTable(loot, "sessions"), self.sessionID or "current")
+    bySession[key] = (bySession[key] or 0) + quantity
+    self.db.meta.lastSavedAt = now
+    return true
+end
+
+local function IsOwnLoot(message)
+    if type(message) ~= "string" then return false end
+    -- Blizzard provides localized self-loot templates; avoid recording others' loot.
+    local templates = {
+        "LOOT_ITEM_SELF", "LOOT_ITEM_SELF_MULTIPLE",
+        "LOOT_ITEM_CREATED_SELF", "LOOT_ITEM_CREATED_SELF_MULTIPLE",
+        "LOOT_ITEM_PUSHED_SELF", "LOOT_ITEM_PUSHED_SELF_MULTIPLE",
+    }
+    for _, name in ipairs(templates) do
+        local template = _G[name]
+        if type(template) == "string" then
+            local prefix = template:match("^(.-)%%s")
+            if prefix and prefix ~= "" and message:sub(1, #prefix) == prefix then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+function D:HandleLootMessage(message)
+    if not IsOwnLoot(message) then return false, "not self loot" end
+    local id = type(message) == "string" and message:match("|Hitem:(%d+):")
+    if not id then return false, "no item link" end
+    local suffix = message:match("|h|r%s*(.*)$") or ""
+    local count = tonumber(suffix:match("[xX](%d+)")) or 1
+    return self:RecordLoot({itemID = tonumber(id), quantity = count})
+end
+
 function D:GetGatherStore()
     return self:GetDB().gathering
 end
@@ -659,7 +786,7 @@ function D:RegisterBlizzardSettingsCategory()
 
     local commands = canvas:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
     commands:SetPoint("TOPLEFT", status, "BOTTOMLEFT", 0, -18)
-    commands:SetText("/cdata  ·  /cdata snapshot  ·  /cdata restore")
+    commands:SetText("/cdata  ·  /cdata snapshot  ·  /cdvault restore confirm")
 
     local category = Settings.RegisterCanvasLayoutCategory(canvas, "ComfyData")
     Settings.RegisterAddOnCategory(category)
@@ -667,7 +794,8 @@ function D:RegisterBlizzardSettingsCategory()
 end
 
 function D:Initialize()
-    self:EnsureDB()
+    local ready = self:EnsureDB()
+    if not ready then return end
     self:RegisterBlizzardSettingsCategory()
 
     self.sessionStartedAt = Epoch()
@@ -703,12 +831,25 @@ function D:Initialize()
         "PLAYER_XP_UPDATE", "UPDATE_EXHAUSTION", "PLAYER_PVP_KILLS_CHANGED", "TIME_PLAYED_MSG",
         "UPDATE_INVENTORY_DURABILITY", "PLAYER_EQUIPMENT_CHANGED", "UPDATE_FACTION",
         "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED", "COMBAT_LOG_EVENT_UNFILTERED",
-        "UNIT_PET", "PLAYER_LOGOUT",
+        "UNIT_PET", "PLAYER_LOGOUT", "PLAYER_DEAD", "QUEST_TURNED_IN", "CHAT_MSG_LOOT",
     }
     for _, event in ipairs(events) do pcall(frame.RegisterEvent, frame, event) end
 
     frame:SetScript("OnEvent", function(_, event, ...)
-        if event == "TIME_PLAYED_MSG" then
+        if event == "QUEST_TURNED_IN" then
+            D:RecordQuestCompletion(...)
+            return
+        elseif event == "PLAYER_DEAD" then
+            local now = Epoch()
+            if not D.lastPlayerDeathAt or now - D.lastPlayerDeathAt >= 3 then
+                D:RecordDeath({time = now})
+                D.lastPlayerDeathAt = now
+            end
+            return
+        elseif event == "CHAT_MSG_LOOT" then
+            D:HandleLootMessage(...)
+            return
+        elseif event == "TIME_PLAYED_MSG" then
             D:HandleTimePlayed(...)
             return
         elseif event == "PLAYER_REGEN_DISABLED" then
@@ -770,23 +911,19 @@ SlashCmdList.COMFYDATA = function(msg)
         local ok, why = D:CreateVaultSnapshot("manual")
         D:Print(ok and "Vault snapshot created." or ("Snapshot unavailable: " .. tostring(why)))
     elseif msg == "restore" then
-        if type(ComfyDataVault) == "table" and type(ComfyDataVault.GetLatestSnapshotData) == "function" then
-            local data, snapshot = ComfyDataVault:GetLatestSnapshotData()
-            if type(data) == "table" and D:ValidateDB(data) then
-                ComfyDataDB = data
-                D:Print("Restored snapshot '" .. tostring(snapshot and snapshot.reason or "?") .. "'. Use /reload now.")
-            else
-                D:Print("No valid Vault snapshot available.")
-            end
-        else
-            D:Print("ComfyDataVault is not loaded.")
-        end
+        D:Print("Use /cdvault restore confirm for a checksum-verified restore. /cdata does not overwrite data.")
+
     else
+        if D.blockedReason then
+            D:Print("Database paused for safety: " .. D.blockedReason)
+            D:Print("Inspect Vault, then use /cdvault restore confirm for manual recovery.")
+            return
+        end
         local s = D:GetStatus()
         D:Print("v" .. s.version .. " | schema " .. s.schemaVersion .. " | chars " .. s.characters
             .. " | mobs " .. s.killMobs .. " | nodes " .. s.gatherNodes .. " | gather items " .. s.gatherItems
             .. " | vault " .. (s.vault and "OK" or "missing"))
-        D:Print("Commands: /cdata snapshot | /cdata restore")
+        D:Print("Commands: /cdata snapshot | /cdvault restore confirm")
     end
 end
 
