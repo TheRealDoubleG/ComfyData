@@ -244,7 +244,9 @@ end
 
 function D:EnsureDB()
     if self.blockedReason then return nil, self.blockedReason end
-    if type(ComfyDataDB) ~= "table" then ComfyDataDB = self:NewDatabase() end
+    -- nil is a normal first launch. Any other non-table value indicates
+    -- damage: preserve it via verified recovery/quarantine instead of losing it.
+    if ComfyDataDB == nil then ComfyDataDB = self:NewDatabase() end
 
     local valid, why = self:ValidateDB(ComfyDataDB)
     if not valid then
