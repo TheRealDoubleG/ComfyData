@@ -87,4 +87,26 @@ expect(D:GetDB().loot.items["1234"].total==5,"self loot quantity")
 expect(not D:HandleLootMessage("You receive loot: no item link"),"no item link skipped")
 D:RecordDeath({time=12345})
 expect(D:GetDB().kills.deaths["Forever:Hero"].total==1,"death counted")
+
+-- Regression: non-table top-level SavedVariables must never be lost.
+D.blockedReason=nil
+ComfyDataVault=nil
+ComfyDataDB="recoverable corrupt original"
+local untouched,problem=D:EnsureDB()
+expect(untouched==nil and type(problem)=="string","non-table DB blocked without Vault")
+expect(ComfyDataDB=="recoverable corrupt original","non-table DB preserved without Vault")
+
+D.blockedReason=nil
+ComfyDataVault=V
+ComfyDataVaultDB=nil
+V:EnsureDB()
+ComfyDataDB="another corrupt original"
+local saved=D:EnsureDB()
+expect(type(saved)=="table","non-table DB safe quarantine followed by reset")
+expect(V:EnsureDB().quarantinedData=="another corrupt original","non-table original quarantined")
+
+D.blockedReason=nil
+ComfyDataVault=nil
+ComfyDataDB=nil
+expect(type(D:EnsureDB())=="table","first run still creates fresh DB")
 print("PASS: "..tests.." ComfyData recovery/migration checks")
