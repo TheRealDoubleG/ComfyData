@@ -955,13 +955,34 @@ function D:RegisterBlizzardSettingsCategory()
     self.settingsCategory = category
 end
 
+-- A second /reload may start in the very same second as the previous
+-- session. Never replace an existing session entry: all Comfy modules
+-- use this ID to separate loot, kills and gathered items per session.
+function D:AllocateSessionID(at)
+    local sessions = self:GetDB().sessions
+    local epoch = tonumber(at) or Epoch()
+    local base = tostring(math.floor(epoch)) .. ":" .. self:GetCurrentKey()
+    if sessions[base] == nil then return base end
+    for suffix = 2, 10000 do
+        local candidate = base .. "#" .. tostring(suffix)
+        if sessions[candidate] == nil then return candidate end
+    end
+    return nil, "session ID space exhausted: no records overwritten"
+end
+
 function D:Initialize()
     local ready = self:EnsureDB()
     if not ready then return end
     self:RegisterBlizzardSettingsCategory()
 
     self.sessionStartedAt = Epoch()
-    self.sessionID = tostring(self.sessionStartedAt) .. ":" .. self:GetCurrentKey()
+    local allocated, allocationError = self:AllocateSessionID(self.sessionStartedAt)
+    if not allocated then
+        self.blockedReason = allocationError
+        self:Print("Session initialization stopped: " .. tostring(allocationError))
+        return
+    end
+    self.sessionID = allocated
     self.sessionStart = Now()
     self.sessionMoneyGained = 0
     self.sessionDamage = 0
