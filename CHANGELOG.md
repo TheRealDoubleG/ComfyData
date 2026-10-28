@@ -1,6 +1,9 @@
 # ComfyData Changelog
 
 ## 0.7 (development)
+- Copper balance ledger with income/expense history and optional currency snapshots.
+- Remove forbidden combat-log listener; ComfyKills handles PARTY_KILL directly.
+
 - Quest, player death and self-loot tracking, schema v3.
 - Block unsafe auto-reset and migration without Vault backup.
 - Use explicit checksum-verified restore path.
