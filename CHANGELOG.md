@@ -1,6 +1,10 @@
 # ComfyData Changelog
 
 ## 0.7 (development)
+- Validate direct loot and gather item IDs and quantities; reject invalid/nonnumeric/node-key data before storing in SavedVariables.
+- Suppress duplicate quest completions across same-second /reload while retaining valid later repeats.
+- Reject malformed quest IDs and invalid API currency balances without losing a real zero balance.
+- Add strict offline Lua 5.1/5.4 regression coverage for these cases.
 - Ensure unique session IDs even across repeated /reload in the same second; prevent overwrite or conflation of kill, loot, gather and session history. Add 16 Lua regression tests.
 - Safely refresh already known currency IDs after CURRENCY_DISPLAY_UPDATE without ID or on world entry; preserve records on API failure.
 - Add 23 targeted currency tests and 14 more cross-addon assertions for currency updates.
