@@ -487,7 +487,9 @@ end
 
 function D:CaptureCurrency(currencyID)
     currencyID = tonumber(currencyID)
-    if not currencyID or not C_CurrencyInfo or type(C_CurrencyInfo.GetCurrencyInfo) ~= "function" then return false end
+    if not currencyID or currencyID < 1 or currencyID ~= math.floor(currencyID)
+        or type(C_CurrencyInfo) ~= "table"
+        or type(C_CurrencyInfo.GetCurrencyInfo) ~= "function" then return false end
     local ok, info = pcall(C_CurrencyInfo.GetCurrencyInfo, currencyID)
     if not ok or type(info) ~= "table" then return false end
     local safe, quantity, name = pcall(function()
@@ -503,6 +505,31 @@ function D:CaptureCurrency(currencyID)
     existing.lastSeen = Epoch()
     byChar[key] = existing
     return true
+end
+
+-- Some client builds emit CURRENCY_DISPLAY_UPDATE without a currency ID.
+-- Safely refresh only currencies already learned for this character.
+-- Newly introduced IDs still require an explicit event or separate discovery.
+function D:RefreshTrackedCurrencies()
+    if type(C_CurrencyInfo) ~= "table"
+        or type(C_CurrencyInfo.GetCurrencyInfo) ~= "function" then
+        return false, "currency API unavailable"
+    end
+    local db = self:GetDB()
+    local wallet = type(db.wallet) == "table" and db.wallet or nil
+    local byChar = wallet and type(wallet.currencies) == "table"
+        and wallet.currencies[self:GetCurrentKey()] or nil
+    if type(byChar) ~= "table" then return false, "no known currencies" end
+    local refreshed, examined = 0, 0
+    for key, record in pairs(byChar) do
+        local id = tonumber(key)
+        if type(record) == "table" and id and id >= 1 and id == math.floor(id) then
+            examined = examined + 1
+            if examined > 256 then break end
+            if self:CaptureCurrency(id) then refreshed = refreshed + 1 end
+        end
+    end
+    return refreshed > 0, refreshed
 end
 
 function D:GetKillStore()
@@ -986,7 +1013,12 @@ function D:Initialize()
             D:HandleLootMessage(...)
             return
         elseif event == "CURRENCY_DISPLAY_UPDATE" then
-            D:CaptureCurrency(...)
+            local currencyID = ...
+            if currencyID == nil then
+                D:RefreshTrackedCurrencies()
+            else
+                D:CaptureCurrency(currencyID)
+            end
             return
         elseif event == "TIME_PLAYED_MSG" then
             D:HandleTimePlayed(...)
@@ -1022,6 +1054,9 @@ function D:Initialize()
             return
         end
 
+        if event == "PLAYER_ENTERING_WORLD" then
+            D:RefreshTrackedCurrencies()
+        end
         D:RefreshCurrent(event == "BAG_UPDATE_DELAYED" or event == "PLAYER_ENTERING_WORLD",
             event == "UPDATE_FACTION" or event == "PLAYER_ENTERING_WORLD")
     end)
