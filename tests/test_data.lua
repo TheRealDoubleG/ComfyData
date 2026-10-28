@@ -29,8 +29,12 @@ ComfyDataDB={characters="broken"}
 local recovered=D:EnsureDB()
 expect(type(recovered)=="table","recovery succeeded")
 expect(recovered.characters["Forever:Hero"].money==123,"restored previous valid contents")
-expect(V:EnsureDB().quarantinedData==nil,"no quarantine necessary when backup verified")
+expect(V:EnsureDB().quarantinedData.characters=="broken","corrupted current data preserved before verified recovery")
 
+-- Fresh independent Vault fixture for the next corruption scenario.
+ComfyDataVaultDB=nil
+V:EnsureDB()
+expect(V:CreateSnapshot(live,"original-2"),"fresh verified recovery fixture")
 D.blockedReason=nil
 ComfyDataDB={meta={},characters="broken",kills={account={example=4}}}
 local restored,why=D:EnsureDB()
