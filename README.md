@@ -126,3 +126,9 @@ search limit is exhausted.
 
 Offline tests simulate repeated reloads using SavedVariables. Real
 WoW Forever persistence still requires manual verification.
+
+## Input integrity and quest replay (development)
+
+ComfyData validates item IDs, loot/gather amounts, quest IDs and API currency quantities before persisting them. NaN, infinity, fractional quantities and invalid identifiers are rejected, whereas legitimate zero currency balances and implicit 1-item loot still work. The quest completion tracker checks saved per-character timestamps to suppress duplicate events after a quick /reload, without rejecting later repeatable quests.
+
+Run offline tests with python3 ../AI-Work/run_comfy_tests.py on the developer's CachyOS machine, or run test_gather_input_safety.lua, test_loot_input_safety.lua, test_quest_reload_safety.lua and test_currency_refresh.lua individually. Actual WoW Forever client and SavedVariables persistence still need live validation.
