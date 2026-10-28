@@ -167,6 +167,25 @@ function D:ValidateDB(db)
         if db[key] ~= nil and type(db[key]) ~= "table" then return false, key .. " is invalid" end
     end
     if db.meta ~= nil and type(db.meta) ~= "table" then return false, "meta is invalid" end
+    -- Never silently replace a corrupted *nested* SavedVariables table.
+    -- Missing tables are normal for older addon versions and can be created.
+    local nested = {
+        kills = {"account", "characters", "sessions", "deaths"},
+        gathering = {"nodes", "items", "zones", "characters", "sessions"},
+        quests = {"completed", "characters"},
+        loot = {"items", "characters", "sessions"},
+        wallet = {"characters", "lastChanges", "currencies"},
+    }
+    for section, keys in pairs(nested) do
+        local parent = db[section]
+        if type(parent) == "table" then
+            for _, key in ipairs(keys) do
+                if parent[key] ~= nil and type(parent[key]) ~= "table" then
+                    return false, section .. "." .. key .. " is invalid"
+                end
+            end
+        end
+    end
     return true
 end
 
@@ -259,8 +278,20 @@ function D:EnsureDB()
         if type(ComfyDataVault) == "table" and type(ComfyDataVault.GetLatestSnapshotData) == "function" then
             local data = ComfyDataVault:GetLatestSnapshotData()
             if type(data) == "table" and self:ValidateDB(data) then
+                -- Keep the broken but potentially newer data for inspection.
+                -- An older verified snapshot can omit recently earned items.
+                local saved, err = false, "quarantine unavailable"
+                if type(ComfyDataVault.QuarantineData) == "function" then
+                    saved, err = ComfyDataVault:QuarantineData(ComfyDataDB, why)
+                end
+                if not saved then
+                    self.blockedReason = "recovery blocked: cannot preserve original: " .. tostring(err)
+                    self:Print(self.blockedReason)
+                    return nil, self.blockedReason
+                end
                 ComfyDataDB = data
                 recovered = true
+                self:Print("Verified snapshot loaded; original preserved in Vault quarantine.")
             end
         end
         if not recovered then
