@@ -1,6 +1,9 @@
 # ComfyData Changelog
 
 ## 0.7 (development)
+- Detect damaged nested kill, quest, loot and wallet tables before any repair.
+- Quarantine the full newer original before restoring an older checksum-verified snapshot;
+  if quarantine is unavailable/occupied, block the automatic recovery instead of losing data.
 - Copper balance ledger with income/expense history and optional currency snapshots.
 - Remove forbidden combat-log listener; ComfyKills handles PARTY_KILL directly.
 
