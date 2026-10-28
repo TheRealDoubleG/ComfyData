@@ -154,6 +154,7 @@ function D:NewDatabase()
         gathering = {nodes = {}, items = {}, zones = {}, characters = {}, sessions = {}},
         quests = {completed = {}, characters = {}},
         loot = {items = {}, characters = {}, sessions = {}},
+        wallet = {characters = {}, lastChanges = {}, currencies = {}},
         sessions = {},
         accountTotals = {},
     }
@@ -161,7 +162,7 @@ end
 
 function D:ValidateDB(db)
     if type(db) ~= "table" then return false, "database is not a table" end
-    local required = {"characters", "kills", "gathering", "quests", "loot", "sessions", "accountTotals"}
+    local required = {"characters", "kills", "gathering", "quests", "loot", "wallet", "sessions", "accountTotals"}
     for _, key in ipairs(required) do
         if db[key] ~= nil and type(db[key]) ~= "table" then return false, key .. " is invalid" end
     end
@@ -192,6 +193,10 @@ function D:EnsureStructure(db)
     EnsureTable(loot, "items")
     EnsureTable(loot, "characters")
     EnsureTable(loot, "sessions")
+    local wallet = EnsureTable(db, "wallet")
+    EnsureTable(wallet, "characters")
+    EnsureTable(wallet, "lastChanges")
+    EnsureTable(wallet, "currencies")
     EnsureTable(db, "sessions")
     EnsureTable(db, "accountTotals")
     return db
@@ -390,10 +395,26 @@ function D:RefreshCurrent(includeBags, includeReputation)
         local ok, money = pcall(GetMoney)
         if ok then
             money = tonumber(money) or 0
-            if self.lastMoney ~= nil and money > self.lastMoney then
-                local gain = money - self.lastMoney
-                record.moneyGainedTracked = (tonumber(record.moneyGainedTracked) or 0) + gain
-                self.sessionMoneyGained = (self.sessionMoneyGained or 0) + gain
+            if self.lastMoney ~= nil and money ~= self.lastMoney then
+                -- Currency in integer copper: retain both positive and negative
+                -- changes, rather than only tracking gross inflows.
+                local delta = money - self.lastMoney
+                local wallet = EnsureTable(self.db, "wallet")
+                local char = EnsureTable(EnsureTable(wallet, "characters"), self:GetCurrentKey())
+                char.totalEarned = (tonumber(char.totalEarned) or 0) + math.max(0, delta)
+                char.totalSpent = (tonumber(char.totalSpent) or 0) + math.max(0, -delta)
+                char.changeCount = (tonumber(char.changeCount) or 0) + 1
+                char.lastBalance, char.lastChangeAt = money, Epoch()
+                local changes = EnsureTable(wallet, "lastChanges")
+                changes[#changes+1] = {at=Epoch(), characterKey=self:GetCurrentKey(),
+                    before=self.lastMoney, after=money, delta=delta}
+                if #changes > 300 then table.remove(changes, 1) end
+                if delta > 0 then
+                    record.moneyGainedTracked = (tonumber(record.moneyGainedTracked) or 0) + delta
+                    self.sessionMoneyGained = (self.sessionMoneyGained or 0) + delta
+                else
+                    record.moneySpentTracked = (tonumber(record.moneySpentTracked) or 0) - delta
+                end
             end
             self.lastMoney = money
             record.money = money
@@ -431,6 +452,26 @@ function D:RefreshCurrent(includeBags, includeReputation)
     self.db.meta.lastSavedAt = Epoch()
     self:GetAccountTotals()
     return record
+end
+
+function D:CaptureCurrency(currencyID)
+    currencyID = tonumber(currencyID)
+    if not currencyID or not C_CurrencyInfo or type(C_CurrencyInfo.GetCurrencyInfo) ~= "function" then return false end
+    local ok, info = pcall(C_CurrencyInfo.GetCurrencyInfo, currencyID)
+    if not ok or type(info) ~= "table" then return false end
+    local safe, quantity, name = pcall(function()
+        return tonumber(info.quantity), type(info.name) == "string" and info.name or nil
+    end)
+    if not safe or not quantity then return false end
+    local key = tostring(math.floor(currencyID))
+    local wallet = EnsureTable(self:GetDB(), "wallet")
+    local byChar = EnsureTable(EnsureTable(wallet, "currencies"), self:GetCurrentKey())
+    local existing = type(byChar[key]) == "table" and byChar[key] or {}
+    existing.quantity = quantity
+    existing.name = name or existing.name
+    existing.lastSeen = Epoch()
+    byChar[key] = existing
+    return true
 end
 
 function D:GetKillStore()
@@ -832,8 +873,9 @@ function D:Initialize()
         "PLAYER_ENTERING_WORLD", "PLAYER_MONEY", "BAG_UPDATE_DELAYED", "PLAYER_LEVEL_UP",
         "PLAYER_XP_UPDATE", "UPDATE_EXHAUSTION", "PLAYER_PVP_KILLS_CHANGED", "TIME_PLAYED_MSG",
         "UPDATE_INVENTORY_DURABILITY", "PLAYER_EQUIPMENT_CHANGED", "UPDATE_FACTION",
-        "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED", "COMBAT_LOG_EVENT_UNFILTERED",
+        "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED",
         "UNIT_PET", "PLAYER_LOGOUT", "PLAYER_DEAD", "QUEST_TURNED_IN", "CHAT_MSG_LOOT",
+        "CURRENCY_DISPLAY_UPDATE",
     }
     for _, event in ipairs(events) do pcall(frame.RegisterEvent, frame, event) end
 
@@ -851,6 +893,9 @@ function D:Initialize()
         elseif event == "CHAT_MSG_LOOT" then
             D:HandleLootMessage(...)
             return
+        elseif event == "CURRENCY_DISPLAY_UPDATE" then
+            D:CaptureCurrency(...)
+            return
         elseif event == "TIME_PLAYED_MSG" then
             D:HandleTimePlayed(...)
             return
@@ -859,9 +904,6 @@ function D:Initialize()
             return
         elseif event == "PLAYER_REGEN_ENABLED" then
             D:EndCombat()
-            return
-        elseif event == "COMBAT_LOG_EVENT_UNFILTERED" then
-            D:HandleCombatLog()
             return
         elseif event == "UNIT_PET" then
             local unit = ...
