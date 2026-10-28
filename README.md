@@ -45,3 +45,21 @@ Forever release-client validation is still needed.
   to disk between logout/UI reloads. Live Forever test remains necessary.
 
 Offline tests: lua5.1 tests/test_wallet.lua . ; lua5.4 tests/test_wallet.lua .
+
+## Nested SavedVariables integrity safety (development)
+
+On startup, malformed tables inside kills, gathering, quests, loot, and wallet
+are treated as corruption, **not silently replaced**. Missing tables from
+older releases are still created. Before loading an older verified snapshot,
+ComfyData now keeps a deep copy of the *newer damaged original* in the
+ComfyDataVault quarantine so recent loot/kills/copper are not overwritten
+without a recoverable copy. If the quarantine is already occupied or the
+Vault is unavailable, startup stops rather than destroying original data.
+
+This is a **fail-closed** policy, not a self-healing guarantee. If the game
+reports a blocked startup, preserve the entire WTF/SavedVariables folder
+before attempting manual recovery. Never delete a quarantined copy to
+make the warning disappear. Offline tests verify data in memory but not
+real-client persistence to disk.
+
+Test: lua5.1 tests/test_nested_data_guard.lua . ../ComfyDataVault
