@@ -1,6 +1,7 @@
 # ComfyData Changelog
 
 ## 0.7 (development)
+- Ensure unique session IDs even across repeated /reload in the same second; prevent overwrite or conflation of kill, loot, gather and session history. Add 16 Lua regression tests.
 - Safely refresh already known currency IDs after CURRENCY_DISPLAY_UPDATE without ID or on world entry; preserve records on API failure.
 - Add 23 targeted currency tests and 14 more cross-addon assertions for currency updates.
 - Record latest verified loot-source GUID and source kind for gathering (GameObject / Creature when API supports it).
