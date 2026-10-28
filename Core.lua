@@ -604,7 +604,8 @@ end
 function D:RecordKillXP(key, amount)
     amount = tonumber(amount)
     local record = key and self:GetKillRecord(key)
-    if not record or not amount or amount <= 0 then return false end
+    if not record or not amount or amount < 1 or amount > 1000000000
+        or amount % 1 ~= 0 then return false end
     record.xpTotal = (tonumber(record.xpTotal) or 0) + amount
     record.xpSamples = (tonumber(record.xpSamples) or 0) + 1
     record.averageXP = record.xpTotal / record.xpSamples
