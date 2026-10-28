@@ -653,33 +653,84 @@ function D:RecordLoot(data)
     return true
 end
 
-local function IsOwnLoot(message)
-    if type(message) ~= "string" then return false end
-    -- Blizzard provides localized self-loot templates; avoid recording others' loot.
-    local templates = {
-        "LOOT_ITEM_SELF", "LOOT_ITEM_SELF_MULTIPLE",
-        "LOOT_ITEM_CREATED_SELF", "LOOT_ITEM_CREATED_SELF_MULTIPLE",
-        "LOOT_ITEM_PUSHED_SELF", "LOOT_ITEM_PUSHED_SELF_MULTIPLE",
-    }
-    for _, name in ipairs(templates) do
-        local template = _G[name]
-        if type(template) == "string" then
-            local prefix = template:match("^(.-)%%s")
-            if prefix and prefix ~= "" and message:sub(1, #prefix) == prefix then
-                return true
+-- Match the actual Blizzard-localized self-loot format, not only its prefix.
+-- LOOT_ITEM_SELF_MULTIPLE may be "%sx%d" or "%d x %s" across locales.
+-- Never interpret an unrelated player's loot message as our own.
+local SELF_LOOT_TEMPLATES = {
+    "LOOT_ITEM_SELF_MULTIPLE", "LOOT_ITEM_CREATED_SELF_MULTIPLE",
+    "LOOT_ITEM_PUSHED_SELF_MULTIPLE", "LOOT_ITEM_SELF",
+    "LOOT_ITEM_CREATED_SELF", "LOOT_ITEM_PUSHED_SELF",
+}
+
+local function MatchSelfLootTemplate(message, template)
+    if type(message) ~= "string" or type(template) ~= "string" then return nil end
+    local pattern, placeholders = {"^"}, {}
+    local i = 1
+    local magic = "^$()%.[]*+-?"
+    while i <= #template do
+        local c = template:sub(i, i)
+        if c ~= "%" then
+            pattern[#pattern + 1] = magic:find(c, 1, true) and ("%" .. c) or c
+            i = i + 1
+        else
+            local pos, kind = template:sub(i):match("^%%(%d+)%$([sd])")
+            if pos then
+                i = i + #pos + 3
+            else
+                kind = template:sub(i + 1, i + 1)
+                i = i + 2
+            end
+            if kind == "s" then
+                placeholders[#placeholders + 1] = "s"
+                pattern[#pattern + 1] = "(.+)"
+            elseif kind == "d" then
+                placeholders[#placeholders + 1] = "d"
+                pattern[#pattern + 1] = "(%d+)"
+            elseif kind == "%" then
+                pattern[#pattern + 1] = "%%"
+            else
+                return nil
             end
         end
     end
-    return false
+    if #placeholders == 0 then return nil end
+    pattern[#pattern + 1] = "$"
+    local captures = {message:match(table.concat(pattern))}
+    if #captures ~= #placeholders then return nil end
+    local text, amount, hasExplicitAmount = nil, 1, false
+    for n, kind in ipairs(placeholders) do
+        if kind == "s" and captures[n]:find("|Hitem:", 1, true) then
+            text = captures[n]
+        elseif kind == "d" then
+            amount = tonumber(captures[n])
+            hasExplicitAmount = true
+        end
+    end
+    if not text then return nil end
+    -- Some older clients or offline fixtures omit the MULTIPLE global.
+    -- A visible xN *after* the final hyperlink is still safely recoverable.
+    if not hasExplicitAmount then
+        local suffixCount = text:match("|h|r%s*[xX](%d+)%s*$")
+        if suffixCount then amount = tonumber(suffixCount) end
+    end
+    return text, amount
 end
 
 function D:HandleLootMessage(message)
-    if not IsOwnLoot(message) then return false, "not self loot" end
-    local id = type(message) == "string" and message:match("|Hitem:(%d+):")
-    if not id then return false, "no item link" end
-    local suffix = message:match("|h|r%s*(.*)$") or ""
-    local count = tonumber(suffix:match("[xX](%d+)")) or 1
-    return self:RecordLoot({itemID = tonumber(id), quantity = count})
+    if type(message) ~= "string" then return false, "not a loot message" end
+    for _, constant in ipairs(SELF_LOOT_TEMPLATES) do
+        local itemText, amount = MatchSelfLootTemplate(message, _G[constant])
+        if itemText then
+            local id = itemText:match("|Hitem:(%d+):")
+            if not id then return false, "no item link" end
+            if not amount or amount < 1 or amount > 100000 or amount ~= math.floor(amount) then
+                return false, "invalid loot quantity"
+            end
+            local name = itemText:match("|h%[([^%]]+)%]|h")
+            return self:RecordLoot({itemID = tonumber(id), quantity = amount, name = name})
+        end
+    end
+    return false, "not self loot"
 end
 
 function D:GetGatherStore()
