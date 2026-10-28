@@ -495,7 +495,10 @@ function D:CaptureCurrency(currencyID)
     local safe, quantity, name = pcall(function()
         return tonumber(info.quantity), type(info.name) == "string" and info.name or nil
     end)
-    if not safe or not quantity then return false end
+    -- Currency API balances are nonnegative whole-token counts.
+    -- NaN and infinity must never reach persisted SavedVariables.
+    if not safe or not quantity or quantity < 0 or quantity > 1000000000000
+        or quantity % 1 ~= 0 then return false end
     local key = tostring(math.floor(currencyID))
     local wallet = EnsureTable(self:GetDB(), "wallet")
     local byChar = EnsureTable(EnsureTable(wallet, "currencies"), self:GetCurrentKey())
@@ -620,17 +623,29 @@ end
 
 function D:RecordQuestCompletion(questID, xpReward, moneyReward)
     questID = tonumber(questID)
-    if not questID or questID <= 0 then return false, "invalid quest ID" end
+    if not questID or questID <= 0 or questID > 2147483647
+        or questID % 1 ~= 0 then return false, "invalid quest ID" end
     local charKey = self:GetCurrentKey()
     local key = tostring(math.floor(questID))
     local now = Epoch()
+    local quests = EnsureTable(self:GetDB(), "quests")
+    local previousChar = type(quests.characters[charKey]) == "table"
+        and quests.characters[charKey] or nil
+    local previousQuest = previousChar and previousChar[key] or nil
+    local previousAt = type(previousQuest) == "table"
+        and tonumber(previousQuest.lastAt) or nil
+    -- Unlike the in-memory event cache, the character's SavedVariables
+    -- survives /reload. Reject repeated events from the same few seconds
+    -- without suppressing a later, genuinely repeatable quest.
+    if previousAt and now >= previousAt and now - previousAt < 3 then
+        return false, "duplicate event"
+    end
     self.recentQuestEvents = self.recentQuestEvents or {}
     local recentKey = charKey .. ":" .. key
     if self.recentQuestEvents[recentKey] and now - self.recentQuestEvents[recentKey] < 3 then
         return false, "duplicate event"
     end
     self.recentQuestEvents[recentKey] = now
-    local quests = EnsureTable(self:GetDB(), "quests")
     local completed = EnsureTable(quests, "completed")
     local record = completed[key] or {questID = questID, firstAt = now, total = 0, characters = {}}
     completed[key] = record
@@ -657,10 +672,11 @@ end
 function D:RecordLoot(data)
     if type(data) ~= "table" then return false, "invalid loot" end
     local itemID = tonumber(data.itemID)
-    if not itemID or itemID <= 0 then return false, "missing itemID" end
-    local quantity = tonumber(data.quantity) or 1
-    if quantity < 1 or quantity > 100000 then quantity = 1 end
-    quantity = math.floor(quantity)
+    if not itemID or itemID < 1 or itemID > 2147483647
+        or itemID % 1 ~= 0 then return false, "invalid itemID" end
+    local quantity = data.quantity == nil and 1 or tonumber(data.quantity)
+    if not quantity or quantity < 1 or quantity > 100000
+        or quantity % 1 ~= 0 then return false, "invalid quantity" end
     local now = tonumber(data.time) or Epoch()
     local charKey = data.characterKey or self:GetCurrentKey()
     local loot = EnsureTable(self:GetDB(), "loot")
@@ -767,9 +783,14 @@ end
 function D:RecordGather(data)
     data = type(data) == "table" and data or {}
     local itemID = tonumber(data.itemID)
-    if not itemID then return false end
-
-    local quantity = math.max(1, tonumber(data.quantity) or 1)
+    -- Do not persist invalid or non-integral values in SavedVariables.
+    if not itemID or itemID <= 0 or itemID > 2147483647
+        or itemID % 1 ~= 0 then return false end
+    local quantity = data.quantity == nil and 1 or tonumber(data.quantity)
+    if not quantity or quantity < 1 or quantity > 100000
+        or quantity % 1 ~= 0 then return false end
+    if data.nodeKey ~= nil and (type(data.nodeKey) ~= "string"
+        or data.nodeKey == "" or #data.nodeKey > 256) then return false end
     local store = self:GetGatherStore()
     local charKey = data.characterKey or self:GetCurrentKey()
     local now = tonumber(data.time) or Epoch()
