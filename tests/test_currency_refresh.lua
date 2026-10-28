@@ -64,4 +64,14 @@ C_CurrencyInfo={GetCurrencyInfo=function(id) calls[#calls+1]=id; return {quantit
 ok=D:RefreshTrackedCurrencies()
 expect(not ok and #calls==0,"currencies cannot leak across characters")
 expect(D.db.wallet.currencies[character]==nil,"new character not given phantom data")
+character="Forever:Hero"
+local savedAmount=D.db.wallet.currencies[character]["42"].quantity
+for _,bad in ipairs({-1,math.huge,0/0,42.5,1e15}) do
+ C_CurrencyInfo={GetCurrencyInfo=function() return {quantity=bad,name="invalid"} end}
+ expect(not D:CaptureCurrency(42),"reject invalid API currency quantity")
+ expect(D.db.wallet.currencies[character]["42"].quantity==savedAmount,"bad API value cannot damage saved amount")
+end
+C_CurrencyInfo={GetCurrencyInfo=function() return {quantity=0,name="Zero"} end}
+expect(D:CaptureCurrency(42),"zero coins is valid")
+expect(D.db.wallet.currencies[character]["42"].quantity==0,"zero quantity kept as actual zero")
 print("PASS: "..checks.." tracked-currency refresh safety checks")
