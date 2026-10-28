@@ -83,3 +83,10 @@ In-game /reload tests are still required.
 Regression tests:
     lua5.1 tests/test_localized_loot.lua .
     lua5.4 tests/test_localized_loot.lua .
+
+## Gathering provenance (development)
+
+ComfyGatherer passes the GetLootSourceInfo GUID to ComfyData when the client exposes it. ComfyData saves lastSourceGUID and lastSourceType on gathering items and nodes (latest source only). GameObject may mean an ore vein; Creature may mean a mob drop. Missing source data does not cause gathering to be discarded. In-game tests are still required.
+
+    lua5.1 tests/test_gather_sources.lua .
+    lua5.4 tests/test_gather_sources.lua .
