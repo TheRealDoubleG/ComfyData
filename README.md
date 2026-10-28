@@ -31,3 +31,17 @@ lua5.1 tests/test_data.lua . ../ComfyDataVault
 lua5.4 tests/test_data.lua . ../ComfyDataVault
 
 Forever release-client validation is still needed.
+
+## Launch-data reliability follow-up (development)
+
+- PLAYER_MONEY polls exact wallet balance in integer copper. Positive and negative
+  deltas update per-character totals and a bounded 300-change audit trail.
+- CURRENCY_DISPLAY_UPDATE captures non-secret API currency quantities
+  by character and currency ID where C_CurrencyInfo.GetCurrencyInfo is available.
+- Removed restricted COMBAT_LOG_EVENT_UNFILTERED registration.
+  ComfyKills 0.4 handles kill events with PARTY_KILL.
+- ComfyData alone stores player deaths, avoiding duplicate counting.
+- Capture is best effort; addon code cannot force WoW to flush SavedVariables
+  to disk between logout/UI reloads. Live Forever test remains necessary.
+
+Offline tests: lua5.1 tests/test_wallet.lua . ; lua5.4 tests/test_wallet.lua .
