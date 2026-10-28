@@ -1,6 +1,7 @@
 # ComfyData Changelog
 
 ## 0.7 (development)
+- Reject invalid NaN/infinite/fractional/out-of-range mob XP samples before updating persistent kill XP averages; add 24 Lua-5.1/5.4 regression checks.
 - Validate direct loot and gather item IDs and quantities; reject invalid/nonnumeric/node-key data before storing in SavedVariables.
 - Suppress duplicate quest completions across same-second /reload while retaining valid later repeats.
 - Reject malformed quest IDs and invalid API currency balances without losing a real zero balance.
