@@ -756,6 +756,12 @@ function D:RecordGather(data)
         store.items[itemKey] = item
     end
     item.name = data.itemName or item.name
+    -- Keep the latest loot-source type so a post-/reload check can distinguish
+    -- a GameObject ore vein from ore looted from a Creature where available.
+    if type(data.sourceGUID) == "string" and data.sourceGUID ~= "" then
+        item.lastSourceGUID = data.sourceGUID
+        item.lastSourceType = data.sourceGUID:match("^([^-]+)")
+    end
     item.total = (tonumber(item.total) or 0) + quantity
     item.lastSeen = now
     item.characters[charKey] = (tonumber(item.characters[charKey]) or 0) + quantity
@@ -777,6 +783,10 @@ function D:RecordGather(data)
         store.nodes[nodeKey] = node
     end
     node.lastSeen = now
+    if type(data.sourceGUID) == "string" and data.sourceGUID ~= "" then
+        node.lastSourceGUID = data.sourceGUID
+        node.lastSourceType = data.sourceGUID:match("^([^-]+)")
+    end
     if data.visitID == nil or node.lastVisitID ~= data.visitID then
         node.visits = (tonumber(node.visits) or 0) + 1
         node.lastVisitID = data.visitID
