@@ -4,8 +4,8 @@ ComfyData = ComfyData or {}
 local D = ComfyData
 
 D.name = ADDON_NAME or "ComfyData"
-D.version = "0.6"
-D.schemaVersion = 2
+D.version = "0.7"
+D.schemaVersion = 3
 
 local function Epoch()
     return type(time) == "function" and time() or 0
@@ -152,6 +152,9 @@ function D:NewDatabase()
         characters = {},
         kills = {account = {}, characters = {}, sessions = {}, deaths = {}},
         gathering = {nodes = {}, items = {}, zones = {}, characters = {}, sessions = {}},
+        quests = {completed = {}, characters = {}},
+        loot = {items = {}, characters = {}, sessions = {}},
+        wallet = {characters = {}, lastChanges = {}, currencies = {}},
         sessions = {},
         accountTotals = {},
     }
@@ -159,11 +162,30 @@ end
 
 function D:ValidateDB(db)
     if type(db) ~= "table" then return false, "database is not a table" end
-    local required = {"characters", "kills", "gathering", "sessions", "accountTotals"}
+    local required = {"characters", "kills", "gathering", "quests", "loot", "wallet", "sessions", "accountTotals"}
     for _, key in ipairs(required) do
         if db[key] ~= nil and type(db[key]) ~= "table" then return false, key .. " is invalid" end
     end
     if db.meta ~= nil and type(db.meta) ~= "table" then return false, "meta is invalid" end
+    -- Never silently replace a corrupted *nested* SavedVariables table.
+    -- Missing tables are normal for older addon versions and can be created.
+    local nested = {
+        kills = {"account", "characters", "sessions", "deaths"},
+        gathering = {"nodes", "items", "zones", "characters", "sessions"},
+        quests = {"completed", "characters"},
+        loot = {"items", "characters", "sessions"},
+        wallet = {"characters", "lastChanges", "currencies"},
+    }
+    for section, keys in pairs(nested) do
+        local parent = db[section]
+        if type(parent) == "table" then
+            for _, key in ipairs(keys) do
+                if parent[key] ~= nil and type(parent[key]) ~= "table" then
+                    return false, section .. "." .. key .. " is invalid"
+                end
+            end
+        end
+    end
     return true
 end
 
@@ -183,6 +205,17 @@ function D:EnsureStructure(db)
     EnsureTable(gathering, "zones")
     EnsureTable(gathering, "characters")
     EnsureTable(gathering, "sessions")
+    local quests = EnsureTable(db, "quests")
+    EnsureTable(quests, "completed")
+    EnsureTable(quests, "characters")
+    local loot = EnsureTable(db, "loot")
+    EnsureTable(loot, "items")
+    EnsureTable(loot, "characters")
+    EnsureTable(loot, "sessions")
+    local wallet = EnsureTable(db, "wallet")
+    EnsureTable(wallet, "characters")
+    EnsureTable(wallet, "lastChanges")
+    EnsureTable(wallet, "currencies")
     EnsureTable(db, "sessions")
     EnsureTable(db, "accountTotals")
     return db
@@ -197,25 +230,36 @@ function D:CreateVaultSnapshot(reason)
 end
 
 function D:MigrateDB(db)
+    local meta = type(db.meta) == "table" and db.meta or {}
+    local oldSchema = tonumber(meta.schemaVersion) or tonumber(db.schema) or 1
+    if oldSchema < self.schemaVersion then
+        -- Never migrate a populated DB without first preserving its original state.
+        -- A failed Vault write must not silently erase the only recoverable copy.
+        local ok, why = self:CreateVaultSnapshot(
+            "pre-migration-" .. tostring(oldSchema) .. "-to-" .. tostring(self.schemaVersion))
+        local hasCharacters = type(db.characters) == "table" and next(db.characters) ~= nil
+        if not ok and hasCharacters then
+            return nil, "pre-migration backup failed: " .. tostring(why)
+        end
+    end
+
     self:EnsureStructure(db)
-    local oldSchema = tonumber(db.meta.schemaVersion) or tonumber(db.schema) or 1
     if oldSchema >= self.schemaVersion then
-        db.meta.schemaVersion = self.schemaVersion
+        db.meta.schemaVersion = oldSchema -- Never downgrade newer schema data.
         db.schema = nil
         return db
     end
 
-    self:CreateVaultSnapshot("pre-migration-" .. tostring(oldSchema) .. "-to-" .. tostring(self.schemaVersion))
-
     if oldSchema < 2 then
         db.meta.migrationHistory[#db.meta.migrationHistory + 1] = {
-            from = oldSchema,
-            to = 2,
-            at = Epoch(),
-            version = self.version,
+            from = oldSchema, to = 2, at = Epoch(), version = self.version,
         }
     end
-
+    if oldSchema < 3 then
+        db.meta.migrationHistory[#db.meta.migrationHistory + 1] = {
+            from = math.max(2, oldSchema), to = 3, at = Epoch(), version = self.version,
+        }
+    end
     db.meta.schemaVersion = self.schemaVersion
     db.schema = nil
     self:EnsureStructure(db)
@@ -223,29 +267,59 @@ function D:MigrateDB(db)
 end
 
 function D:EnsureDB()
-    if type(ComfyDataDB) ~= "table" then ComfyDataDB = self:NewDatabase() end
+    if self.blockedReason then return nil, self.blockedReason end
+    -- nil is a normal first launch. Any other non-table value indicates
+    -- damage: preserve it via verified recovery/quarantine instead of losing it.
+    if ComfyDataDB == nil then ComfyDataDB = self:NewDatabase() end
 
-    local valid = self:ValidateDB(ComfyDataDB)
+    local valid, why = self:ValidateDB(ComfyDataDB)
     if not valid then
         local recovered
         if type(ComfyDataVault) == "table" and type(ComfyDataVault.GetLatestSnapshotData) == "function" then
             local data = ComfyDataVault:GetLatestSnapshotData()
             if type(data) == "table" and self:ValidateDB(data) then
+                -- Keep the broken but potentially newer data for inspection.
+                -- An older verified snapshot can omit recently earned items.
+                local saved, err = false, "quarantine unavailable"
+                if type(ComfyDataVault.QuarantineData) == "function" then
+                    saved, err = ComfyDataVault:QuarantineData(ComfyDataDB, why)
+                end
+                if not saved then
+                    self.blockedReason = "recovery blocked: cannot preserve original: " .. tostring(err)
+                    self:Print(self.blockedReason)
+                    return nil, self.blockedReason
+                end
                 ComfyDataDB = data
                 recovered = true
+                self:Print("Verified snapshot loaded; original preserved in Vault quarantine.")
             end
         end
         if not recovered then
             local broken = ComfyDataDB
+            local quarantined = false
+            if type(ComfyDataVault) == "table" and type(ComfyDataVault.QuarantineData) == "function" then
+                quarantined = ComfyDataVault:QuarantineData(broken, why)
+            end
+            if not quarantined then
+                self.blockedReason = "invalid DB and no safe quarantine: " .. tostring(why)
+                self:Print(self.blockedReason .. " - no automatic reset; restore with /cdvault.")
+                return nil, self.blockedReason
+            end
             ComfyDataDB = self:NewDatabase()
             ComfyDataDB.meta.recoveredBrokenDB = {
-                at = Epoch(),
-                oldType = type(broken),
+                at = Epoch(), oldType = type(broken), reason = why,
             }
+            self:Print("Corrupt DB preserved in the Vault quarantine before reset.")
         end
     end
 
-    ComfyDataDB = self:MigrateDB(ComfyDataDB)
+    local migrated, err = self:MigrateDB(ComfyDataDB)
+    if not migrated then
+        self.blockedReason = err
+        self:Print("Database startup stopped: " .. tostring(err))
+        return nil, err
+    end
+    ComfyDataDB = migrated
     self.db = ComfyDataDB
     return self.db
 end
@@ -352,10 +426,26 @@ function D:RefreshCurrent(includeBags, includeReputation)
         local ok, money = pcall(GetMoney)
         if ok then
             money = tonumber(money) or 0
-            if self.lastMoney ~= nil and money > self.lastMoney then
-                local gain = money - self.lastMoney
-                record.moneyGainedTracked = (tonumber(record.moneyGainedTracked) or 0) + gain
-                self.sessionMoneyGained = (self.sessionMoneyGained or 0) + gain
+            if self.lastMoney ~= nil and money ~= self.lastMoney then
+                -- Currency in integer copper: retain both positive and negative
+                -- changes, rather than only tracking gross inflows.
+                local delta = money - self.lastMoney
+                local wallet = EnsureTable(self.db, "wallet")
+                local char = EnsureTable(EnsureTable(wallet, "characters"), self:GetCurrentKey())
+                char.totalEarned = (tonumber(char.totalEarned) or 0) + math.max(0, delta)
+                char.totalSpent = (tonumber(char.totalSpent) or 0) + math.max(0, -delta)
+                char.changeCount = (tonumber(char.changeCount) or 0) + 1
+                char.lastBalance, char.lastChangeAt = money, Epoch()
+                local changes = EnsureTable(wallet, "lastChanges")
+                changes[#changes+1] = {at=Epoch(), characterKey=self:GetCurrentKey(),
+                    before=self.lastMoney, after=money, delta=delta}
+                if #changes > 300 then table.remove(changes, 1) end
+                if delta > 0 then
+                    record.moneyGainedTracked = (tonumber(record.moneyGainedTracked) or 0) + delta
+                    self.sessionMoneyGained = (self.sessionMoneyGained or 0) + delta
+                else
+                    record.moneySpentTracked = (tonumber(record.moneySpentTracked) or 0) - delta
+                end
             end
             self.lastMoney = money
             record.money = money
@@ -393,6 +483,56 @@ function D:RefreshCurrent(includeBags, includeReputation)
     self.db.meta.lastSavedAt = Epoch()
     self:GetAccountTotals()
     return record
+end
+
+function D:CaptureCurrency(currencyID)
+    currencyID = tonumber(currencyID)
+    if not currencyID or currencyID < 1 or currencyID ~= math.floor(currencyID)
+        or type(C_CurrencyInfo) ~= "table"
+        or type(C_CurrencyInfo.GetCurrencyInfo) ~= "function" then return false end
+    local ok, info = pcall(C_CurrencyInfo.GetCurrencyInfo, currencyID)
+    if not ok or type(info) ~= "table" then return false end
+    local safe, quantity, name = pcall(function()
+        return tonumber(info.quantity), type(info.name) == "string" and info.name or nil
+    end)
+    -- Currency API balances are nonnegative whole-token counts.
+    -- NaN and infinity must never reach persisted SavedVariables.
+    if not safe or not quantity or quantity < 0 or quantity > 1000000000000
+        or quantity % 1 ~= 0 then return false end
+    local key = tostring(math.floor(currencyID))
+    local wallet = EnsureTable(self:GetDB(), "wallet")
+    local byChar = EnsureTable(EnsureTable(wallet, "currencies"), self:GetCurrentKey())
+    local existing = type(byChar[key]) == "table" and byChar[key] or {}
+    existing.quantity = quantity
+    existing.name = name or existing.name
+    existing.lastSeen = Epoch()
+    byChar[key] = existing
+    return true
+end
+
+-- Some client builds emit CURRENCY_DISPLAY_UPDATE without a currency ID.
+-- Safely refresh only currencies already learned for this character.
+-- Newly introduced IDs still require an explicit event or separate discovery.
+function D:RefreshTrackedCurrencies()
+    if type(C_CurrencyInfo) ~= "table"
+        or type(C_CurrencyInfo.GetCurrencyInfo) ~= "function" then
+        return false, "currency API unavailable"
+    end
+    local db = self:GetDB()
+    local wallet = type(db.wallet) == "table" and db.wallet or nil
+    local byChar = wallet and type(wallet.currencies) == "table"
+        and wallet.currencies[self:GetCurrentKey()] or nil
+    if type(byChar) ~= "table" then return false, "no known currencies" end
+    local refreshed, examined = 0, 0
+    for key, record in pairs(byChar) do
+        local id = tonumber(key)
+        if type(record) == "table" and id and id >= 1 and id == math.floor(id) then
+            examined = examined + 1
+            if examined > 256 then break end
+            if self:CaptureCurrency(id) then refreshed = refreshed + 1 end
+        end
+    end
+    return refreshed > 0, refreshed
 end
 
 function D:GetKillStore()
@@ -464,7 +604,8 @@ end
 function D:RecordKillXP(key, amount)
     amount = tonumber(amount)
     local record = key and self:GetKillRecord(key)
-    if not record or not amount or amount <= 0 then return false end
+    if not record or not amount or amount < 1 or amount > 1000000000
+        or amount % 1 ~= 0 then return false end
     record.xpTotal = (tonumber(record.xpTotal) or 0) + amount
     record.xpSamples = (tonumber(record.xpSamples) or 0) + 1
     record.averageXP = record.xpTotal / record.xpSamples
@@ -481,6 +622,161 @@ function D:RecordDeath(data)
     return deaths
 end
 
+function D:RecordQuestCompletion(questID, xpReward, moneyReward)
+    questID = tonumber(questID)
+    if not questID or questID <= 0 or questID > 2147483647
+        or questID % 1 ~= 0 then return false, "invalid quest ID" end
+    local charKey = self:GetCurrentKey()
+    local key = tostring(math.floor(questID))
+    local now = Epoch()
+    local quests = EnsureTable(self:GetDB(), "quests")
+    local previousChar = type(quests.characters[charKey]) == "table"
+        and quests.characters[charKey] or nil
+    local previousQuest = previousChar and previousChar[key] or nil
+    local previousAt = type(previousQuest) == "table"
+        and tonumber(previousQuest.lastAt) or nil
+    -- Unlike the in-memory event cache, the character's SavedVariables
+    -- survives /reload. Reject repeated events from the same few seconds
+    -- without suppressing a later, genuinely repeatable quest.
+    if previousAt and now >= previousAt and now - previousAt < 3 then
+        return false, "duplicate event"
+    end
+    self.recentQuestEvents = self.recentQuestEvents or {}
+    local recentKey = charKey .. ":" .. key
+    if self.recentQuestEvents[recentKey] and now - self.recentQuestEvents[recentKey] < 3 then
+        return false, "duplicate event"
+    end
+    self.recentQuestEvents[recentKey] = now
+    local completed = EnsureTable(quests, "completed")
+    local record = completed[key] or {questID = questID, firstAt = now, total = 0, characters = {}}
+    completed[key] = record
+    record.total = (record.total or 0) + 1
+    record.lastAt = now
+    record.characters[charKey] = (record.characters[charKey] or 0) + 1
+    local ok, rewardXP = pcall(tonumber, xpReward)
+    if ok and rewardXP then record.lastXPReward = rewardXP end
+    ok, rewardXP = pcall(tonumber, moneyReward)
+    if ok and rewardXP then record.lastMoneyReward = rewardXP end
+    if C_QuestLog and type(C_QuestLog.GetTitleForQuestID) == "function" then
+        local valid, title = pcall(C_QuestLog.GetTitleForQuestID, questID)
+        if valid and type(title) == "string" then record.title = title end
+    end
+    local byCharacter = EnsureTable(EnsureTable(quests, "characters"), charKey)
+    local entry = byCharacter[key] or {count = 0}
+    entry.count = entry.count + 1
+    entry.lastAt = now
+    byCharacter[key] = entry
+    self.db.meta.lastSavedAt = now
+    return true
+end
+
+function D:RecordLoot(data)
+    if type(data) ~= "table" then return false, "invalid loot" end
+    local itemID = tonumber(data.itemID)
+    if not itemID or itemID < 1 or itemID > 2147483647
+        or itemID % 1 ~= 0 then return false, "invalid itemID" end
+    local quantity = data.quantity == nil and 1 or tonumber(data.quantity)
+    if not quantity or quantity < 1 or quantity > 100000
+        or quantity % 1 ~= 0 then return false, "invalid quantity" end
+    local now = tonumber(data.time) or Epoch()
+    local charKey = data.characterKey or self:GetCurrentKey()
+    local loot = EnsureTable(self:GetDB(), "loot")
+    local items = EnsureTable(loot, "items")
+    local key = tostring(math.floor(itemID))
+    local record = items[key] or {itemID = itemID, firstAt = now, total = 0, events = 0}
+    items[key] = record
+    record.total = record.total + quantity
+    record.events = record.events + 1
+    record.lastAt = now
+    if type(data.name) == "string" then record.name = data.name end
+    local byCharacter = EnsureTable(EnsureTable(loot, "characters"), charKey)
+    byCharacter[key] = (byCharacter[key] or 0) + quantity
+    local bySession = EnsureTable(EnsureTable(loot, "sessions"), self.sessionID or "current")
+    bySession[key] = (bySession[key] or 0) + quantity
+    self.db.meta.lastSavedAt = now
+    return true
+end
+
+-- Match the actual Blizzard-localized self-loot format, not only its prefix.
+-- LOOT_ITEM_SELF_MULTIPLE may be "%sx%d" or "%d x %s" across locales.
+-- Never interpret an unrelated player's loot message as our own.
+local SELF_LOOT_TEMPLATES = {
+    "LOOT_ITEM_SELF_MULTIPLE", "LOOT_ITEM_CREATED_SELF_MULTIPLE",
+    "LOOT_ITEM_PUSHED_SELF_MULTIPLE", "LOOT_ITEM_SELF",
+    "LOOT_ITEM_CREATED_SELF", "LOOT_ITEM_PUSHED_SELF",
+}
+
+local function MatchSelfLootTemplate(message, template)
+    if type(message) ~= "string" or type(template) ~= "string" then return nil end
+    local pattern, placeholders = {"^"}, {}
+    local i = 1
+    local magic = "^$()%.[]*+-?"
+    while i <= #template do
+        local c = template:sub(i, i)
+        if c ~= "%" then
+            pattern[#pattern + 1] = magic:find(c, 1, true) and ("%" .. c) or c
+            i = i + 1
+        else
+            local pos, kind = template:sub(i):match("^%%(%d+)%$([sd])")
+            if pos then
+                i = i + #pos + 3
+            else
+                kind = template:sub(i + 1, i + 1)
+                i = i + 2
+            end
+            if kind == "s" then
+                placeholders[#placeholders + 1] = "s"
+                pattern[#pattern + 1] = "(.+)"
+            elseif kind == "d" then
+                placeholders[#placeholders + 1] = "d"
+                pattern[#pattern + 1] = "(%d+)"
+            elseif kind == "%" then
+                pattern[#pattern + 1] = "%%"
+            else
+                return nil
+            end
+        end
+    end
+    if #placeholders == 0 then return nil end
+    pattern[#pattern + 1] = "$"
+    local captures = {message:match(table.concat(pattern))}
+    if #captures ~= #placeholders then return nil end
+    local text, amount, hasExplicitAmount = nil, 1, false
+    for n, kind in ipairs(placeholders) do
+        if kind == "s" and captures[n]:find("|Hitem:", 1, true) then
+            text = captures[n]
+        elseif kind == "d" then
+            amount = tonumber(captures[n])
+            hasExplicitAmount = true
+        end
+    end
+    if not text then return nil end
+    -- Some older clients or offline fixtures omit the MULTIPLE global.
+    -- A visible xN *after* the final hyperlink is still safely recoverable.
+    if not hasExplicitAmount then
+        local suffixCount = text:match("|h|r%s*[xX](%d+)%s*$")
+        if suffixCount then amount = tonumber(suffixCount) end
+    end
+    return text, amount
+end
+
+function D:HandleLootMessage(message)
+    if type(message) ~= "string" then return false, "not a loot message" end
+    for _, constant in ipairs(SELF_LOOT_TEMPLATES) do
+        local itemText, amount = MatchSelfLootTemplate(message, _G[constant])
+        if itemText then
+            local id = itemText:match("|Hitem:(%d+):")
+            if not id then return false, "no item link" end
+            if not amount or amount < 1 or amount > 100000 or amount ~= math.floor(amount) then
+                return false, "invalid loot quantity"
+            end
+            local name = itemText:match("|h%[([^%]]+)%]|h")
+            return self:RecordLoot({itemID = tonumber(id), quantity = amount, name = name})
+        end
+    end
+    return false, "not self loot"
+end
+
 function D:GetGatherStore()
     return self:GetDB().gathering
 end
@@ -488,9 +784,14 @@ end
 function D:RecordGather(data)
     data = type(data) == "table" and data or {}
     local itemID = tonumber(data.itemID)
-    if not itemID then return false end
-
-    local quantity = math.max(1, tonumber(data.quantity) or 1)
+    -- Do not persist invalid or non-integral values in SavedVariables.
+    if not itemID or itemID <= 0 or itemID > 2147483647
+        or itemID % 1 ~= 0 then return false end
+    local quantity = data.quantity == nil and 1 or tonumber(data.quantity)
+    if not quantity or quantity < 1 or quantity > 100000
+        or quantity % 1 ~= 0 then return false end
+    if data.nodeKey ~= nil and (type(data.nodeKey) ~= "string"
+        or data.nodeKey == "" or #data.nodeKey > 256) then return false end
     local store = self:GetGatherStore()
     local charKey = data.characterKey or self:GetCurrentKey()
     local now = tonumber(data.time) or Epoch()
@@ -504,6 +805,12 @@ function D:RecordGather(data)
         store.items[itemKey] = item
     end
     item.name = data.itemName or item.name
+    -- Keep the latest loot-source type so a post-/reload check can distinguish
+    -- a GameObject ore vein from ore looted from a Creature where available.
+    if type(data.sourceGUID) == "string" and data.sourceGUID ~= "" then
+        item.lastSourceGUID = data.sourceGUID
+        item.lastSourceType = data.sourceGUID:match("^([^-]+)")
+    end
     item.total = (tonumber(item.total) or 0) + quantity
     item.lastSeen = now
     item.characters[charKey] = (tonumber(item.characters[charKey]) or 0) + quantity
@@ -525,6 +832,10 @@ function D:RecordGather(data)
         store.nodes[nodeKey] = node
     end
     node.lastSeen = now
+    if type(data.sourceGUID) == "string" and data.sourceGUID ~= "" then
+        node.lastSourceGUID = data.sourceGUID
+        node.lastSourceType = data.sourceGUID:match("^([^-]+)")
+    end
     if data.visitID == nil or node.lastVisitID ~= data.visitID then
         node.visits = (tonumber(node.visits) or 0) + 1
         node.lastVisitID = data.visitID
@@ -659,19 +970,41 @@ function D:RegisterBlizzardSettingsCategory()
 
     local commands = canvas:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
     commands:SetPoint("TOPLEFT", status, "BOTTOMLEFT", 0, -18)
-    commands:SetText("/cdata  ·  /cdata snapshot  ·  /cdata restore")
+    commands:SetText("/cdata  ·  /cdata snapshot  ·  /cdvault restore confirm")
 
     local category = Settings.RegisterCanvasLayoutCategory(canvas, "ComfyData")
     Settings.RegisterAddOnCategory(category)
     self.settingsCategory = category
 end
 
+-- A second /reload may start in the very same second as the previous
+-- session. Never replace an existing session entry: all Comfy modules
+-- use this ID to separate loot, kills and gathered items per session.
+function D:AllocateSessionID(at)
+    local sessions = self:GetDB().sessions
+    local epoch = tonumber(at) or Epoch()
+    local base = tostring(math.floor(epoch)) .. ":" .. self:GetCurrentKey()
+    if sessions[base] == nil then return base end
+    for suffix = 2, 10000 do
+        local candidate = base .. "#" .. tostring(suffix)
+        if sessions[candidate] == nil then return candidate end
+    end
+    return nil, "session ID space exhausted: no records overwritten"
+end
+
 function D:Initialize()
-    self:EnsureDB()
+    local ready = self:EnsureDB()
+    if not ready then return end
     self:RegisterBlizzardSettingsCategory()
 
     self.sessionStartedAt = Epoch()
-    self.sessionID = tostring(self.sessionStartedAt) .. ":" .. self:GetCurrentKey()
+    local allocated, allocationError = self:AllocateSessionID(self.sessionStartedAt)
+    if not allocated then
+        self.blockedReason = allocationError
+        self:Print("Session initialization stopped: " .. tostring(allocationError))
+        return
+    end
+    self.sessionID = allocated
     self.sessionStart = Now()
     self.sessionMoneyGained = 0
     self.sessionDamage = 0
@@ -702,13 +1035,35 @@ function D:Initialize()
         "PLAYER_ENTERING_WORLD", "PLAYER_MONEY", "BAG_UPDATE_DELAYED", "PLAYER_LEVEL_UP",
         "PLAYER_XP_UPDATE", "UPDATE_EXHAUSTION", "PLAYER_PVP_KILLS_CHANGED", "TIME_PLAYED_MSG",
         "UPDATE_INVENTORY_DURABILITY", "PLAYER_EQUIPMENT_CHANGED", "UPDATE_FACTION",
-        "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED", "COMBAT_LOG_EVENT_UNFILTERED",
-        "UNIT_PET", "PLAYER_LOGOUT",
+        "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED",
+        "UNIT_PET", "PLAYER_LOGOUT", "PLAYER_DEAD", "QUEST_TURNED_IN", "CHAT_MSG_LOOT",
+        "CURRENCY_DISPLAY_UPDATE",
     }
     for _, event in ipairs(events) do pcall(frame.RegisterEvent, frame, event) end
 
     frame:SetScript("OnEvent", function(_, event, ...)
-        if event == "TIME_PLAYED_MSG" then
+        if event == "QUEST_TURNED_IN" then
+            D:RecordQuestCompletion(...)
+            return
+        elseif event == "PLAYER_DEAD" then
+            local now = Epoch()
+            if not D.lastPlayerDeathAt or now - D.lastPlayerDeathAt >= 3 then
+                D:RecordDeath({time = now})
+                D.lastPlayerDeathAt = now
+            end
+            return
+        elseif event == "CHAT_MSG_LOOT" then
+            D:HandleLootMessage(...)
+            return
+        elseif event == "CURRENCY_DISPLAY_UPDATE" then
+            local currencyID = ...
+            if currencyID == nil then
+                D:RefreshTrackedCurrencies()
+            else
+                D:CaptureCurrency(currencyID)
+            end
+            return
+        elseif event == "TIME_PLAYED_MSG" then
             D:HandleTimePlayed(...)
             return
         elseif event == "PLAYER_REGEN_DISABLED" then
@@ -716,9 +1071,6 @@ function D:Initialize()
             return
         elseif event == "PLAYER_REGEN_ENABLED" then
             D:EndCombat()
-            return
-        elseif event == "COMBAT_LOG_EVENT_UNFILTERED" then
-            D:HandleCombatLog()
             return
         elseif event == "UNIT_PET" then
             local unit = ...
@@ -745,6 +1097,9 @@ function D:Initialize()
             return
         end
 
+        if event == "PLAYER_ENTERING_WORLD" then
+            D:RefreshTrackedCurrencies()
+        end
         D:RefreshCurrent(event == "BAG_UPDATE_DELAYED" or event == "PLAYER_ENTERING_WORLD",
             event == "UPDATE_FACTION" or event == "PLAYER_ENTERING_WORLD")
     end)
@@ -770,23 +1125,19 @@ SlashCmdList.COMFYDATA = function(msg)
         local ok, why = D:CreateVaultSnapshot("manual")
         D:Print(ok and "Vault snapshot created." or ("Snapshot unavailable: " .. tostring(why)))
     elseif msg == "restore" then
-        if type(ComfyDataVault) == "table" and type(ComfyDataVault.GetLatestSnapshotData) == "function" then
-            local data, snapshot = ComfyDataVault:GetLatestSnapshotData()
-            if type(data) == "table" and D:ValidateDB(data) then
-                ComfyDataDB = data
-                D:Print("Restored snapshot '" .. tostring(snapshot and snapshot.reason or "?") .. "'. Use /reload now.")
-            else
-                D:Print("No valid Vault snapshot available.")
-            end
-        else
-            D:Print("ComfyDataVault is not loaded.")
-        end
+        D:Print("Use /cdvault restore confirm for a checksum-verified restore. /cdata does not overwrite data.")
+
     else
+        if D.blockedReason then
+            D:Print("Database paused for safety: " .. D.blockedReason)
+            D:Print("Inspect Vault, then use /cdvault restore confirm for manual recovery.")
+            return
+        end
         local s = D:GetStatus()
         D:Print("v" .. s.version .. " | schema " .. s.schemaVersion .. " | chars " .. s.characters
             .. " | mobs " .. s.killMobs .. " | nodes " .. s.gatherNodes .. " | gather items " .. s.gatherItems
             .. " | vault " .. (s.vault and "OK" or "missing"))
-        D:Print("Commands: /cdata snapshot | /cdata restore")
+        D:Print("Commands: /cdata snapshot | /cdvault restore confirm")
     end
 end
 
