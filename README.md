@@ -63,3 +63,23 @@ make the warning disappear. Offline tests verify data in memory but not
 real-client persistence to disk.
 
 Test: lua5.1 tests/test_nested_data_guard.lua . ../ComfyDataVault
+
+## Locale-safe loot and Bronze-item diagnostics (development)
+
+ComfyData now matches the full Blizzard-localized LOOT_ITEM_*_SELF template
+instead of comparing just a chat-message prefix. MULTIPLE templates are
+checked first, and count can be before or after the item hyperlink.
+Positional localization placeholders and escaped percent signs are supported.
+With old clients lacking a MULTIPLE template, an explicit xN suffix after the
+item hyperlink can be counted. Zero, huge, foreign and unmatched messages
+are rejected. The item link's name is saved to help identify 'Bronze' if
+Forever delivers it as a bag item.
+
+Currency API (wallet.currencies), bag-item loot (loot.items), and ordinary
+coin (wallet.characters) are THREE separate kinds of rewards. We have not
+verified Forever's Bronze item/currency ID or actual client events.
+In-game /reload tests are still required.
+
+Regression tests:
+    lua5.1 tests/test_localized_loot.lua .
+    lua5.4 tests/test_localized_loot.lua .
