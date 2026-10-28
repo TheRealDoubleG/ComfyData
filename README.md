@@ -110,3 +110,19 @@ which one is used.
 Integration with game events is tested by tests/test_suite_integration.lua.
 True WoW Forever event signatures and persistence require in-game /reload
 verification.
+
+## Same-second reload / session isolation (development)
+
+Two /reload operations can start in the same second. Earlier
+timestamp:character IDs could collide, silently replacing an old session's
+metadata or mixing per-session kills, loot and gathering counts. This
+development version allocates IDs from the SavedVariables session table,
+appending a deterministic suffix when necessary (#2, #3, ...). Existing
+session data remains intact. Allocation fails safely if the defensive
+search limit is exhausted.
+
+    lua5.1 tests/test_unique_sessions.lua .
+    lua5.4 tests/test_unique_sessions.lua .
+
+Offline tests simulate repeated reloads using SavedVariables. Real
+WoW Forever persistence still requires manual verification.
