@@ -90,3 +90,23 @@ ComfyGatherer passes the GetLootSourceInfo GUID to ComfyData when the client exp
 
     lua5.1 tests/test_gather_sources.lua .
     lua5.4 tests/test_gather_sources.lua .
+
+## Currency updates without an ID (development)
+
+Some clients may send CURRENCY_DISPLAY_UPDATE without currencyID.
+This development version refreshes **only previously recorded currency IDs**
+for the current character; it also refreshes these known IDs when entering
+the world after login/reload. API failures do not erase stored values, and
+unknown currency IDs are never guessed or enumerated. Newly introduced
+currencies still need an ID-bearing event or a verified discovery method.
+
+Copper in the wallet, an API currency, and a bag-item token such as Bronze
+remain separate tracking mechanisms until the actual Forever client confirms
+which one is used.
+
+    lua5.1 tests/test_currency_refresh.lua .
+    lua5.4 tests/test_currency_refresh.lua .
+
+Integration with game events is tested by tests/test_suite_integration.lua.
+True WoW Forever event signatures and persistence require in-game /reload
+verification.
