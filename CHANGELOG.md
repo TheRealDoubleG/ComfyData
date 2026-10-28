@@ -1,6 +1,7 @@
 # ComfyData Changelog
 
 ## 0.7 (development)
+- Parse localized self-loot templates including variable count order and positional placeholders; reject invalid quantities; retain item names for token diagnostics.
 - Detect damaged nested kill, quest, loot and wallet tables before any repair.
 - Quarantine the full newer original before restoring an older checksum-verified snapshot;
   if quarantine is unavailable/occupied, block the automatic recovery instead of losing data.
